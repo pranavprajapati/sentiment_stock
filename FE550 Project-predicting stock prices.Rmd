@@ -1,0 +1,635 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+
+
+
+```{r}
+
+personal = 2019
+set.seed(personal)
+
+```
+
+Our data is SPY ETF with 8 stocks which are AAPL, MSFT, AMZN, GOOG, JPM, JNJ, XOM and TSLA.
+We transform all data into 3 sets which are close price data, return data and direction data. 
+
+Our purpuse is that we are going to build and select 2 statistical learning models to create a strategy for SPY ETF trading.
+\vspace{5mm}
+```{r , message=FALSE, warning=FALSE}
+library(quantmod)
+
+Stock <- c("SPY","AAPL", "MSFT", "AMZN", "GOOG", "JPM", "JNJ", "XOM", "TSLA")
+Start = "2014-01-01"
+End = "2019-04-25"
+
+sp500.close <- NULL
+sp500.return <- NULL
+
+for (i in Stock){
+  print(i)
+        temp.stock <- getSymbols(Symbols = i, from = Start, to = End, auto.assign = F)
+        sp500.close <- cbind(sp500.close, temp.stock[,4])
+
+        temp.return <- dailyReturn(temp.stock, type = "arithmetic")
+        
+        sp500.return <- cbind(sp500.return, temp.return)
+}
+colnames(sp500.close) <- Stock
+colnames(sp500.return) <- paste("r.",Stock, sep = "") 
+sp500.close <- data.frame(sp500.close)
+sp500.return <- data.frame(sp500.return)
+
+```
+\vspace{5mm}
+The first set of data is close price.
+\vspace{5mm}
+```{r}
+head(sp500.close, 4)
+```
+\vspace{5mm}
+The second set of data is return which we are going to combine lag 1 step and lage 2 steps of return into this set.
+\vspace{5mm}
+```{r}
+head(sp500.return, 4)
+```
+
+```{r}
+sp500.return.lag1 <- rbind(c(NA*1:ncol(sp500.return[,2:ncol(sp500.return)])),
+                           sp500.return[1:(nrow(sp500.return)-1),2:ncol(sp500.return)]) 
+colnames(sp500.return.lag1) <- paste("lag1.",Stock[2:length(Stock)], sep = "") 
+
+sp500.return.lag2 <- rbind(c(NA*1:ncol(sp500.return[,2:ncol(sp500.return)])),
+                           sp500.return[1:(nrow(sp500.return)-2),2:ncol(sp500.return)]) 
+sp500.return.lag2 <- rbind(c(NA*1:ncol(sp500.return)),sp500.return.lag2)
+colnames(sp500.return.lag2) <- paste("lag2.",Stock[2:length(Stock)], sep = "") 
+```
+\vspace{5mm}
+The third set of data is direction which 1 means up direction and -1 means down direction. In this set, we convert the data type to factor for future step.
+\vspace{5mm}
+```{r}
+sp500.direction <- NULL
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.SPY < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.AAPL < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.MSFT < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.AMZN < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.GOOG < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.JPM < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.JNJ < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.XOM < 0, -1, 1))
+sp500.direction <- cbind(sp500.direction, ifelse(sp500.return$r.TSLA < 0, -1, 1))
+sp500.direction <- data.frame(sp500.direction)
+colnames(sp500.direction) <- paste("d.",Stock, sep = "")
+
+head(sp500.direction, 4)
+
+class(sp500.direction$d.SPY)
+
+sp500.direction$d.SPY <- as.factor(sp500.direction$d.SPY)
+sp500.direction$d.AAPL <- as.factor(sp500.direction$d.AAPL)
+sp500.direction$d.MSFT <- as.factor(sp500.direction$d.MSFT)
+sp500.direction$d.AMZN <- as.factor(sp500.direction$d.AMZN)
+sp500.direction$d.GOOG <- as.factor(sp500.direction$d.GOOG)
+sp500.direction$d.JPM <- as.factor(sp500.direction$d.JPM)
+sp500.direction$d.JNJ <- as.factor(sp500.direction$d.JNJ)
+sp500.direction$d.XOM <- as.factor(sp500.direction$d.XOM)
+sp500.direction$d.TSLA <- as.factor(sp500.direction$d.TSLA)
+
+class(sp500.direction$d.SPY)
+```
+\vspace{5mm}
+We combine the second and third datasets to be our master dataset that we are going to use.
+\vspace{5mm}
+```{r}
+sp500 <- cbind(sp500.return, sp500.direction)
+sp500 <- cbind(cbind(cbind(sp500.return, sp500.return.lag1), sp500.return.lag2 ),
+               sp500.direction)
+
+sp500 <- sp500[complete.cases(sp500),]
+head(sp500, 4)
+```
+
+For quantitive data, we use the second dataset which is return dataset. We peform fitting model in the purpose of SPY ETF return prediction.
+
+In the first step, we select the predictors by using regression subsets function with forward, backward and exhaustive methods. The result shows that the number of 9 predictors is the optimal number including the return of APPL, TSLA, GOOG, AMZN, JNJ, XOM, JPM, MSFT and lag2 return of JNJ.
+\vspace{5mm}
+
+```{r , message=FALSE, warning=FALSE}
+library(leaps)
+set.seed(personal)
+
+train.index <- sample(1:nrow(sp500), nrow(sp500)/2)
+test.index <- -train.index
+
+sp500.qt.train <- sp500[train.index,1:(9+8+8)] 
+sp500.qt.test <- sp500[test.index,1:(9+8+8)] 
+
+##### Forward
+forward.fit.qt = regsubsets(r.SPY ~ ., data = sp500.qt.train, nvmax = (9+8+8), method = "forward")
+forward.summary.qt = summary(forward.fit.qt)
+
+par(mfrow = c(1, 3))
+
+min.cp.qt = which.min(forward.summary.qt$cp)
+plot(forward.summary.qt$cp, xlab = "Number of Variables", ylab = "Cp", 
+     type = "b",
+main = "Forward : CP")
+points(min.cp.qt,forward.summary.qt$cp[min.cp.qt ],col = "red")
+text(min.cp.qt,forward.summary.qt$cp[min.cp.qt ],as.character(min.cp.qt), 
+     pos=3, col = "red")
+
+min.bic.qt = which.min(forward.summary.qt$bic)
+plot(forward.summary.qt$bic, xlab = "Number of Variables", ylab = "bic", 
+     type = "b",
+main = "Forward: BIC")
+points(min.bic.qt,forward.summary.qt$bic[min.bic.qt ],col = "red")
+text(min.bic.qt,forward.summary.qt$bic[min.bic.qt ],as.character(min.bic.qt), 
+     pos=3, col = "red")
+
+max.adjr2.qt = which.max(forward.summary.qt$adjr2)
+plot(forward.summary.qt$adjr2, xlab = "Number of Variables", ylab = "adjr2", 
+     type = "b",
+main = "Forward: R-sqaured adjusted")
+points(max.adjr2.qt,forward.summary.qt$adjr2[max.adjr2.qt],col = "red")
+text(max.adjr2.qt,forward.summary.qt$adjr2[max.adjr2.qt],as.character(max.adjr2.qt), 
+     pos=3, col = "red")
+
+##### backward
+backward.fit.qt = regsubsets(r.SPY ~ ., data = sp500.qt.train, nvmax = (9+8+8), 
+                             method = "backward")
+backward.summary.qt = summary(backward.fit.qt)
+
+par(mfrow = c(1, 3))
+
+min.cp.qt = which.min(backward.summary.qt$cp)
+plot(backward.summary.qt$cp, xlab = "Number of Variables", ylab = "Cp", 
+     type = "b",
+main = "backward : CP")
+points(min.cp.qt,backward.summary.qt$cp[min.cp.qt ],col = "red")
+text(min.cp.qt,backward.summary.qt$cp[min.cp.qt ],as.character(min.cp.qt), pos=3, 
+     col = "red")
+
+min.bic.qt = which.min(backward.summary.qt$bic)
+plot(backward.summary.qt$bic, xlab = "Number of Variables", ylab = "bic", 
+     type = "b",
+main = "backward: BIC")
+points(min.bic.qt,backward.summary.qt$bic[min.bic.qt ],col = "red")
+text(min.bic.qt,backward.summary.qt$bic[min.bic.qt ],as.character(min.bic.qt), pos=3, 
+     col = "red")
+
+max.adjr2.qt = which.max(backward.summary.qt$adjr2)
+plot(backward.summary.qt$adjr2, xlab = "Number of Variables", ylab = "adjr2", 
+     type = "b",
+main = "backward: R-sqaured adjusted")
+points(max.adjr2.qt,backward.summary.qt$adjr2[max.adjr2.qt],col = "red")
+text(max.adjr2.qt,backward.summary.qt$adjr2[max.adjr2.qt],as.character(max.adjr2.qt), 
+     pos=3, col = "red")
+
+##### Exhaustive
+exhaustive.fit.qt = regsubsets(r.SPY ~ ., data = sp500.qt.train, nvmax = (9+8+8), 
+                               method = "exhaustive")
+exhaustive.summary.qt = summary(exhaustive.fit.qt)
+
+par(mfrow = c(1, 3))
+
+min.cp.qt = which.min(exhaustive.summary.qt$cp)
+plot(exhaustive.summary.qt$cp, xlab = "Number of Variables", ylab = "Cp", 
+     type = "b",
+main = "Exhaustive : CP")
+points(min.cp.qt,exhaustive.summary.qt$cp[min.cp.qt ],col = "red")
+text(min.cp.qt,exhaustive.summary.qt$cp[min.cp.qt ],as.character(min.cp.qt), pos=3, 
+     col = "red")
+
+min.bic.qt = which.min(exhaustive.summary.qt$bic)
+plot(exhaustive.summary.qt$bic, xlab = "Number of Variables", ylab = "bic", 
+     type = "b", main = "Exhaustive: BIC")
+points(min.bic.qt,exhaustive.summary.qt$bic[min.bic.qt ],col = "red")
+text(min.bic.qt,exhaustive.summary.qt$bic[min.bic.qt ],as.character(min.bic.qt), 
+     pos=3, col = "red")
+
+max.adjr2.qt = which.max(exhaustive.summary.qt$adjr2)
+plot(exhaustive.summary.qt$adjr2, xlab = "Number of Variables", ylab = "adjr2", 
+     type = "b", main = "Exhaustive: R-sqaured adjusted")
+points(max.adjr2.qt,exhaustive.summary.qt$adjr2[max.adjr2.qt],col = "red")
+text(max.adjr2.qt,exhaustive.summary.qt$adjr2[max.adjr2.qt],as.character(max.adjr2.qt),
+     pos=3, col = "red")
+
+
+forward.coefi.qt = sort(abs(coef(forward.fit.qt, id = 24)), TRUE)[1:9]
+names(forward.coefi.qt)
+
+backward.coefi.qt = sort(abs(coef(backward.fit.qt, id = 24)), TRUE)[1:9]
+names(backward.coefi.qt)
+
+exhaustive.coefi.qt = sort(abs(coef(exhaustive.fit.qt, id = 24)), TRUE)[1:9]
+names(exhaustive.coefi.qt)
+```
+\vspace{5mm}
+We use 4 models to fit which are Multiple linear regression, Ridge regression, Lasso regression and Bagging. The result shows that the Lasso regression is the best model with the highest r-squared. We will use Lasso regression to perfrom our strategy.
+\vspace{5mm}
+```{r , message=FALSE, warning=FALSE}
+##### Multiple Linear regression
+par(mfrow = c(1, 1))
+lm.fit.qt <- lm(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                    r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, data = sp500.qt.train)
+
+lm.pred.qt <- predict(lm.fit.qt, sp500.qt.test)
+
+r2.lm.qt <- 1 - (sum((sp500.qt.test$r.SPY-lm.pred.qt)^2)/
+                     sum((sp500.qt.test$r.SPY-mean(sp500.qt.test$r.SPY))^2))
+
+plot(1:length(sp500.qt.test$r.SPY), sp500.qt.test$r.SPY, type = "l", col = "red", 
+     xlab = "index", ylab = "Return", 
+     main = paste("Linear Regression \n SPY ETF Return Prediction, R-squared: ",
+                  round(r2.lm.qt ,7)), cex.main = 1)
+lines(1:length(lm.pred.qt),lm.pred.qt, type = "l", col = "blue")
+legend("bottomright", legend = c("Actual", "Prediction"), 
+       col = c("red", "blue"), lty = c(1,1) , cex = 0.8)
+
+##### Ridge Regression
+library(glmnet)
+
+x.ridge = model.matrix(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                           r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, data = sp500.qt.train)
+y.ridge = sp500.qt.train$r.SPY
+
+cv.out.ridge <- cv.glmnet(x.ridge, y.ridge, alpha = 0)
+bestlam.ridge <- cv.out.ridge$lambda.min
+
+x.ridge.test = model.matrix(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG +
+                                r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, data = sp500.qt.test)
+ridge.fit = glmnet(x.ridge, y.ridge, alpha = 0)
+ridge.pred = predict(ridge.fit, s = bestlam.ridge, newx = x.ridge.test)
+
+r2.ridge.qt <- 1 - (sum((sp500.qt.test$r.SPY-ridge.pred)^2)/
+                        sum((sp500.qt.test$r.SPY-mean(sp500.qt.test$r.SPY))^2))
+
+plot(1:length(sp500.qt.test$r.SPY), sp500.qt.test$r.SPY, type = "l", 
+     col = "red", xlab = "index", ylab = "Return", 
+     main = paste("Ridge Regression \n SPY ETF Return Prediction, R-squared: ",
+                  round(r2.ridge.qt ,7)), cex.main = 1)
+lines(1:length(ridge.pred),ridge.pred, type = "l", col = "blue")
+legend("bottomright", legend = c("Actual", "Prediction"), col = c("red", "blue"), 
+       lty = c(1,1) , cex = 0.8)
+
+
+##### Lasso Regression
+library(glmnet)
+
+x.lasso = model.matrix(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                           r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, data = sp500.qt.train)
+y.lasso = sp500.qt.train$r.SPY
+
+cv.out.lasso <- cv.glmnet(x.lasso, y.lasso, alpha = 1)
+bestlam.lasso <- cv.out.lasso$lambda.min
+
+x.lasso.test = model.matrix(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                                r.JPM + r.JNJ + r.XOM + r.TSLA + 
+                                lag2.JNJ, data = sp500.qt.test)
+lasso.fit = glmnet(x.lasso, y.lasso, alpha = 1)
+lasso.pred = predict(lasso.fit, s = bestlam.lasso, newx = x.lasso.test)
+
+r2.lasso.qt <- 1 - (sum((sp500.qt.test$r.SPY-lasso.pred)^2)/
+                        sum((sp500.qt.test$r.SPY-mean(sp500.qt.test$r.SPY))^2))
+
+plot(1:length(sp500.qt.test$r.SPY), sp500.qt.test$r.SPY, type = "l", 
+     col = "red", xlab = "index", ylab = "Return", 
+     main = paste("Lasso Regression \n SPY ETF Return Prediction, R-squared: ",
+                  round(r2.lasso.qt ,7)), cex.main = 1)
+lines(1:length(lasso.pred),lasso.pred, type = "l", col = "blue")
+legend("bottomright", legend = c("Actual", "Prediction"), col = c("red", "blue"), 
+       lty = c(1,1) , cex = 0.8)
+
+##### Bagging/Random Forest
+library(randomForest)
+set.seed(personal)
+
+tree.no <- seq(1000, 1900, by = 100)
+rf.error <- rep(NA, length = length(tree.no))
+
+for(i in 1:length(tree.no)){
+    rf.qt = randomForest(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                             r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, 
+                         data = sp500.qt.train, ntree = tree.no[i], mtry = 9)
+    rf.pred.qt = predict(rf.qt, sp500.qt.train)
+    r2.rf.qt <- 1 - (sum((sp500.qt.train$r.SPY-rf.pred.qt)^2)/
+                         sum((sp500.qt.train$r.SPY-mean(sp500.qt.train$r.SPY))^2))
+    rf.error[i] <- r2.rf.qt
+    
+}
+
+rf.train.error <- rf.error[which.max(rf.error)]
+rf.train.error
+
+best.tree.no <- tree.no[which.max(rf.error)]
+best.tree.no 
+    
+rf.qt = randomForest(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                         r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, 
+                     data = sp500.qt.train, ntree = best.tree.no, mtry = 9)
+rf.pred.qt = predict(rf.qt, sp500.qt.test)
+
+r2.rf.qt <- 1 - (sum((sp500.qt.test$r.SPY-rf.pred.qt)^2)/
+                     sum((sp500.qt.test$r.SPY-mean(sp500.qt.test$r.SPY))^2))
+
+plot(1:length(sp500.qt.test$r.SPY), sp500.qt.test$r.SPY, type = "l", col = "red", 
+     xlab = "index", ylab = "Return", 
+     main = paste("Random Forest Regression \n SPY ETF Return Prediction, R-squared: ",
+                  round(r2.rf.qt ,7)), cex.main = 1)
+lines(1:length(rf.pred.qt),rf.pred.qt, type = "l", col = "blue")
+legend("bottomright", legend = c("Actual", "Prediction"), col = c("red", "blue"), 
+       lty = c(1,1) , cex = 0.8)
+
+df.qt.compare <- data.frame(lm = r2.lm.qt, ridge = r2.ridge.qt, lasso = r2.lasso.qt, 
+                            rf = r2.rf.qt)
+df.qt.compare
+```
+
+\vspace{5mm}
+For qualitative data, we use the third dataset which is direction combined with the second dataset which is return to perform fitting model in the purpose of SPY ETF direction prediction.
+
+Since we have many variables in the dataset, we need to select the most important predictors. We then use feature selection with random forest to rank the importance of predictiors to the response. The result shows there are 21 important predictors with the highest accuracy of cross-validation as shown in the table below.
+\vspace{5mm}
+```{r , message=FALSE, warning=FALSE}
+set.seed(personal)
+sp500.ql.train <- sp500[train.index,2:ncol(sp500)] 
+sp500.ql.test <- sp500[test.index,2:ncol(sp500)] 
+
+###### Rank Features By Importance
+library(mlbench)
+library(caret)
+
+# prepare training scheme
+control.rfi <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the model
+model.rfi <- train(d.SPY ~ ., data=sp500.ql.train, method="lvq", preProcess="scale",
+                   trControl=control.rfi)
+# estimate variable importance
+importance.rfi <- varImp(model.rfi, scale=FALSE)
+# summarize importance
+print(importance.rfi)
+# plot importance
+plot(importance.rfi)
+
+
+###### Feature Selection
+# define the control using a random forest selection function
+control.rfe <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# run the RFE algorithm
+results.rfe <- rfe(sp500.ql.train[,-25], sp500.ql.train$d.SPY, sizes=c(1:32),
+                   rfeControl=control.rfe)
+# summarize the results
+print(results.rfe)
+# list the chosen features
+predictors(results.rfe)
+# plot the results
+plot(results.rfe, type=c("g", "o"))
+```
+
+\vspace{5mm}
+We use 4 models to fit which are Logistic regression, Linear discriminant analysis, Quadratic discriminant analysis and KNN. The result shows that the Logistic regression is the best model with the lowest error. We will use Logistic regression to perfrom our strategy.
+\vspace{5mm}
+```{r , message=FALSE, warning=FALSE}
+###### Logistic Regression
+library(MASS)
+
+glm.fit.ql <- glm(d.SPY ~ r.JPM + r.TSLA + r.XOM + r.MSFT + r.GOOG + 
+                      r.AMZN + r.AAPL + r.JNJ + d.TSLA + d.MSFT + d.JPM + d.GOOG + 
+                      d.AMZN + d.XOM + d.JNJ + d.AAPL + lag2.JPM + lag2.JNJ + 
+                      lag2.XOM + lag1.AMZN + lag1.JPM, family=binomial,data=sp500.ql.train)
+
+glm.prob.ql <- predict(glm.fit.ql, sp500.ql.test, type="response")
+glm.pred.ql <- rep(1, dim(sp500.ql.test)[1])
+glm.pred.ql[glm.prob.ql < 0.5] <- -1
+table(glm.pred.ql, sp500.ql.test$d.SPY)
+
+mean.error.glm <- mean(glm.pred.ql != sp500.ql.test$d.SPY)
+mean.error.glm
+
+###### Linear discriminant Analysis
+
+lda.fit.ql <- lda(d.SPY ~ r.JPM + r.TSLA + r.XOM + r.MSFT + r.GOOG + 
+                      r.AMZN + r.AAPL + r.JNJ + d.TSLA + d.MSFT + d.JPM + d.GOOG + 
+                      d.AMZN + d.XOM + d.JNJ + d.AAPL + lag2.JPM + lag2.JNJ + 
+                      lag2.XOM + lag1.AMZN + lag1.JPM, data = sp500.ql.train)
+
+lda.pred.ql <- predict(lda.fit.ql, sp500.ql.test)
+table(lda.pred.ql$class, sp500.ql.test$d.SPY)
+
+mean.error.lda <- mean(lda.pred.ql$class != sp500.ql.test$d.SPY)
+mean.error.lda
+
+###### Quadratic Discriminant Analysis
+
+qda.fit.ql <- qda(d.SPY ~ r.JPM + r.TSLA + r.XOM + r.MSFT + r.GOOG + 
+                      r.AMZN + r.AAPL + r.JNJ + d.TSLA + d.MSFT + d.JPM + d.GOOG + 
+                      d.AMZN + d.XOM + d.JNJ + d.AAPL + lag2.JPM + lag2.JNJ + 
+                      lag2.XOM + lag1.AMZN + lag1.JPM, data = sp500.ql.train)
+
+qda.pred.ql <- predict(qda.fit.ql, sp500.ql.test)
+table(qda.pred.ql$class, sp500.ql.test$d.SPY)
+
+mean.error.qda <- mean(qda.pred.ql$class != sp500.ql.test$d.SPY)
+mean.error.qda
+
+###### KNN
+
+knn.train.ql <- data.frame(sp500.ql.train$r.JPM, sp500.ql.train$r.TSLA, 
+                           sp500.ql.train$r.XOM, sp500.ql.train$r.MSFT,
+                           sp500.ql.train$r.GOOG, sp500.ql.train$r.AMZN,
+                           sp500.ql.train$r.AAPL,   
+                           sp500.ql.train$r.JNJ, sp500.ql.train$d.TSLA,
+                           sp500.ql.train$d.MSFT, sp500.ql.train$d.JPM,
+                           sp500.ql.train$d.GOOG, 
+                           sp500.ql.train$d.AMZN, sp500.ql.train$d.XOM,
+                           sp500.ql.train$d.JNJ, sp500.ql.train$d.AAPL,
+                           sp500.ql.train$lag2.JPM,
+                           sp500.ql.train$lag2.JNJ, sp500.ql.train$lag2.XOM,
+                           sp500.ql.train$lag1.AMZN,
+                           sp500.ql.train$lag1.JPM)
+colnames(knn.train.ql) <- c("r.JPM", "r.TSLA", "r.XOM", "r.MSFT", "r.GOOG", 
+                            "r.AMZN", "r.AAPL", "r.JNJ", "d.TSLA", "d.MSFT", "d.JPM",
+                            "d.GOOG", "d.AMZN", "d.XOM", "d.JNJ", "d.AAPL", "lag2.JPM",
+                            "lag2.JNJ", "lag2.XOM", "lag1.AMZN", "lag1.JPM")
+
+knn.test.ql <- data.frame(sp500.ql.test$r.JPM, sp500.ql.test$r.TSLA, 
+                          sp500.ql.test$r.XOM, sp500.ql.test$r.MSFT, 
+                          sp500.ql.test$r.GOOG, sp500.ql.test$r.AMZN, 
+                          sp500.ql.test$r.AAPL, sp500.ql.test$r.JNJ, 
+                          sp500.ql.test$d.TSLA, sp500.ql.test$d.MSFT, 
+                          sp500.ql.test$d.JPM, sp500.ql.test$d.GOOG, 
+                          sp500.ql.test$d.AMZN, sp500.ql.test$d.XOM, 
+                          sp500.ql.test$d.JNJ, sp500.ql.test$d.AAPL, 
+                          sp500.ql.test$lag2.JPM, sp500.ql.test$lag2.JNJ,
+                          sp500.ql.test$lag2.XOM, sp500.ql.test$lag1.AMZN,
+                          sp500.ql.test$lag1.JPM)
+colnames(knn.test.ql) <- c("r.JPM", "r.TSLA", "r.XOM", "r.MSFT", "r.GOOG", 
+                           "r.AMZN", "r.AAPL", "r.JNJ", "d.TSLA", "d.MSFT", "d.JPM",
+                           "d.GOOG", "d.AMZN", "d.XOM", "d.JNJ", "d.AAPL", "lag2.JPM",
+                           "lag2.JNJ", "lag2.XOM", "lag1.AMZN", "lag1.JPM")
+
+library(class)
+
+k <- seq(1, 30, by = 1)
+knn.error <- rep(NA, length(k))
+
+for(i in k){
+    knn.fit.ql <- knn(data.frame(knn.train.ql),
+    data.frame(knn.test.ql), sp500.ql.train$d.SPY, k=i)
+    knn.pred.ql <- knn.fit.ql
+    table(knn.pred.ql, sp500.ql.test$d.SPY)
+
+    mean.error.knn <- mean(knn.pred.ql != sp500.ql.test$d.SPY)
+    mean.error.knn
+    knn.error[i] <- mean.error.knn
+}
+min.knn <- which.min(knn.error)
+
+knn.fit.ql <- knn(data.frame(knn.train.ql),
+data.frame(knn.test.ql), sp500.ql.train$d.SPY, k=min.knn)
+knn.pred.ql <- knn.fit.ql
+table(knn.pred.ql, sp500.ql.test$d.SPY)
+
+mean.error.knn <- mean(knn.pred.ql != sp500.ql.test$d.SPY)
+mean.error.knn
+
+result<- data.frame(err.glm = mean.error.glm,
+err.lda = mean.error.lda, err.qda = mean.error.qda,
+err.knn = mean.error.knn)
+row.names(result) <- "percent.error"
+t(result)
+```
+\vspace{5mm}
+For our strategy, we are going to use the prediction of return and direction of SPY ETF to determine the buy signal and sell signal. In our idea, when the return becomes very low with down direction, it is time for us to buy, and when return becomes very high with up direction, it is time for us to sell.
+
+We pick the buy and sell boundary from the distribution of return that we gain from Lasso regression.
+\vspace{5mm}
+```{r}
+sp500.price.TSLAktest <- sp500.close[3:nrow(sp500.close),]
+
+x.lasso.bt = model.matrix(r.SPY ~ r.AAPL + r.MSFT + r.AMZN + r.GOOG + 
+                              r.JPM + r.JNJ + r.XOM + r.TSLA + lag2.JNJ, data = sp500)
+y.lasso.bt = sp500$r.SPY
+
+lasso.pred.TSLAktest = predict(lasso.fit, s = bestlam.lasso, newx = x.lasso.bt)
+r2.lasso.bt <- 1 - (sum((sp500$r.SPY-lasso.pred.TSLAktest)^2)/
+                        sum((sp500$r.SPY-mean(sp500$r.SPY))^2))
+
+glm.prob.bt <- predict(glm.fit.ql, sp500, type="response")
+glm.pred.bt <- rep(1, dim(sp500)[1])
+glm.pred.bt[glm.prob.bt < 0.5] <- -1
+table(glm.pred.bt , sp500$d.SPY)
+mean(glm.pred.bt != sp500$d.SPY)
+
+summary(lasso.pred.TSLAktest)
+sd(lasso.pred.TSLAktest)
+hist(lasso.pred.TSLAktest)
+```
+
+\vspace{5mm}
+For the first case, we will buy when the return becomes lower than 1rd quartile of return minus one SD, and we will sell when the return becomes higher than 3rd quartile of return distribution plus SD. From the performance result, we gain $195 profit with this strategy.
+\vspace{5mm}
+
+```{r}
+bounds <- summary(lasso.pred.TSLAktest)
+
+signal.buy <- as.numeric(substr(bounds[2], 9, 19))  - sd(lasso.pred.TSLAktest)
+signal.sell <- as.numeric(substr(bounds[5], 9, 19)) + sd(lasso.pred.TSLAktest)
+
+gain <- 0
+quantity <- 0
+
+for(i in 1:(nrow(sp500))){
+    
+    if(i == nrow(sp500) && sum(quantity) != 0){
+        gain[i] <- sum(quantity)*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- -1*sum(quantity)
+        break
+    }
+    
+    if(glm.pred.bt[i] == -1 && (lasso.pred.TSLAktest[i] <= signal.buy)){
+        gain[i] <- -1*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- 1
+        
+    }else if(glm.pred.bt[i] == 1 && lasso.pred.TSLAktest[i] >= 
+             signal.sell && sum(quantity) != 0){
+        gain[i] <- sum(quantity)*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- -1*sum(quantity)
+    }else{
+        gain[i] <- 0
+        quantity[i] <- 0
+    }
+
+}
+
+signal.all <- sign(gain)
+buy.index <- which(signal.all == -1)
+sell.index <- which(signal.all == 1)
+
+plot(1:nrow(sp500.price.TSLAktest), sp500.price.TSLAktest$SPY, type = "l", col="blue", 
+     main = paste("Statistical Learning Strategy on SPY ETF \n", "P&L : $",
+                  round(sum(gain),6),sep = ""),
+     xlab = "Index", ylab = "Stock prices", cex.main = 0.8)
+points(buy.index, sp500.price.TSLAktest$SPY[buy.index], col = "green", pch = 19)
+points(sell.index, sp500.price.TSLAktest$SPY[sell.index], col = "red", pch = 19)
+legend("topleft", legend = c("Buy singal", "Sell signal"), col = c("green", "red"), 
+       pch = c(19,19) , cex = 0.8)
+
+```
+
+\vspace{5mm}
+For the second case, we will buy when the return becomes lower than 1rd quartile of return, and we will sell when the return becomes higher than 3rd quartile of return distribution. From the performance result, we gain $131 profit. It seems like this strategy can perfrom very well with the upward trend of SPY ETF.
+\vspace{5mm}
+
+```{r}
+bounds <- summary(lasso.pred.TSLAktest)
+
+signal.buy <- as.numeric(substr(bounds[2], 9, 19))  
+signal.sell <- as.numeric(substr(bounds[5], 9, 19)) 
+
+gain <- 0
+quantity <- 0
+
+for(i in 1:(nrow(sp500))){
+    
+    if(i == nrow(sp500) && sum(quantity) != 0){
+        gain[i] <- sum(quantity)*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- -1*sum(quantity)
+        break
+    }
+    
+    if(glm.pred.bt[i] == -1 && (lasso.pred.TSLAktest[i] <= signal.buy)){
+        gain[i] <- -1*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- 1
+        
+    }else if(glm.pred.bt[i] == 1 && lasso.pred.TSLAktest[i] >= 
+             signal.sell && sum(quantity) != 0){
+        gain[i] <- sum(quantity)*sp500.price.TSLAktest$SPY[i]
+        quantity[i] <- -1*sum(quantity)
+    }else{
+        gain[i] <- 0
+        quantity[i] <- 0
+    }
+
+}
+
+signal.all <- sign(gain)
+buy.index <- which(signal.all == -1)
+sell.index <- which(signal.all == 1)
+
+plot(1:nrow(sp500.price.TSLAktest), sp500.price.TSLAktest$SPY, type = "l", col="blue", 
+     main = paste("Statistical Learning Strategy on SPY ETF \n", "P&L : $",
+                  round(sum(gain),6),sep = ""),
+     xlab = "Index", ylab = "Stock prices", cex.main = 0.8)
+points(buy.index, sp500.price.TSLAktest$SPY[buy.index], col = "green", pch = 19)
+points(sell.index, sp500.price.TSLAktest$SPY[sell.index], col = "red", pch = 19)
+legend("topleft", legend = c("Buy singal", "Sell signal"), col = c("green", "red"), 
+       pch = c(19,19) , cex = 0.8)
+
+```
+
+
